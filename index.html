@@ -1,0 +1,1101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>GRASP — Prototype (Camera)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --bg:#0b0f10; --panel:#12181a; --panel-2:#151d1f; --line:#233033;
+    --text:#dfe7e6; --text-dim:#7c8f8f;
+    --cyan:#4fd9c9; --amber:#e0a952; --green:#5fbf6a; --red:#d9615f; --coral:#e08a6b;
+    --t1:#5fbf6a; --t2:#4a90e2; --t3:#e0a952; --t4:#e08a6b;
+    --mono:"IBM Plex Mono","Consolas",monospace; --sans:"IBM Plex Sans","Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:#000;color:var(--text);font-family:var(--sans);}
+  body{display:flex;}
+  /* Light theme overrides (toggled from Settings) */
+  body.light-theme{ --bg:#f4f1ea; --panel:#ffffff; --panel-2:#eef0ee; --line:#d9dcd6; --text:#1c2422; --text-dim:#6b7472; }
+  body.light-theme #stage-wrap{background:#cfd2ce;}
+
+  /* ---- letterboxed stage: aspect-ratio locked to the detected table shape ---- */
+  #stage-wrap{flex:1;display:flex;align-items:center;justify-content:center;background:#000;overflow:hidden;}
+  #stage{position:relative;background:var(--bg);aspect-ratio:16/9;width:100%;max-width:100%;max-height:100%;overflow:hidden;border:1px solid var(--line);}
+
+  .screen{position:absolute;inset:0;display:none;}
+  .screen.active{display:flex;}
+
+  /* ---- Calibration screen ---- */
+  #screen-calibrate{flex-direction:column;align-items:center;justify-content:center;gap:22px;padding:30px;}
+  .calib-title{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-dim);}
+  .checklist{display:flex;flex-direction:column;gap:10px;width:340px;}
+  .check-row{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:13px;color:var(--text-dim);}
+  .check-dot{width:14px;height:14px;border-radius:50%;border:2px solid var(--line);flex-shrink:0;}
+  .check-row.ok .check-dot{background:var(--green);border-color:var(--green);}
+  .check-row.ok{color:var(--text);}
+  .mode-row{display:flex;gap:10px;}
+  .mode-row .gbtn{padding:8px 16px;font-size:11px;}
+  .mode-row .gbtn.mode-active{background:var(--amber);border-color:var(--amber);color:#0b0f10;}
+  .manual-hint{font-family:var(--mono);font-size:11px;color:var(--amber);text-align:center;min-height:16px;}
+  .skip-btn{border-color:var(--line);color:var(--text-dim);padding:8px 18px;font-size:11px;}
+  .skip-btn:not(:disabled):hover{background:rgba(124,143,143,.1);color:var(--text);}
+  /* On the no-camera build there's nothing visible to click corners on,
+     so Manual Input isn't offered -- automatic detection only */
+  body.no-camera .mode-row, body.no-camera .manual-hint{display:none;}
+
+  /* ---- Home screen ---- */
+  #screen-home{flex-direction:column;align-items:center;justify-content:center;gap:26px;}
+  .logo{font-family:var(--mono);font-size:64px;font-weight:700;letter-spacing:.06em;color:var(--cyan);}
+  .tagline{font-family:var(--mono);font-size:12px;color:var(--text-dim);letter-spacing:.1em;text-transform:uppercase;margin-top:-16px;}
+
+  /* ---- Help / tutorial screen ---- */
+  #screen-help{display:none;grid-template-columns:1fr 1fr;grid-template-rows:1fr auto;padding:24px;gap:18px;}
+  #screen-help.active{display:grid;}
+  .help-instructions{grid-column:1;grid-row:1;display:flex;flex-direction:column;gap:12px;}
+  .help-instructions h2, .help-ai h2{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);margin:0 0 4px;}
+  .instr-step{display:flex;gap:10px;font-size:13px;line-height:1.5;color:var(--text-dim);}
+  .instr-num{font-family:var(--mono);color:var(--amber);flex-shrink:0;}
+  .help-ai{grid-column:2;grid-row:1;display:flex;flex-direction:column;}
+  .ai-bubble{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:11px;line-height:1.5;color:var(--text-dim);flex:1;}
+  .demo-area{grid-column:1/3;grid-row:2;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:16px;position:relative;height:120px;}
+  .demo-label{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);position:absolute;top:10px;left:16px;}
+  .demo-grab{position:absolute;left:40px;bottom:16px;width:70px;height:36px;border-radius:8px;background:var(--amber);color:#0b0f10;font-family:var(--mono);font-size:12px;display:flex;align-items:center;justify-content:center;font-weight:700;transition:left 1.8s ease, top 1.8s ease, transform .3s;}
+  .demo-grab.moved{left:calc(100% - 110px);transform:scale(1.05);}
+  .demo-drop{position:absolute;right:40px;bottom:16px;width:90px;height:44px;border:1px dashed var(--cyan);border-radius:8px;}
+  .demo-cursor{position:absolute;left:76px;bottom:22px;width:22px;height:22px;border-radius:50%;border:2px solid var(--cyan);transition:left 1.8s ease, border-color .3s, width .2s, height .2s;}
+  .demo-cursor.moved{left:calc(100% - 100px);border-color:var(--amber);width:16px;height:16px;}
+
+  /* ---- Hub screen (lesson dashboard, matches the reference design) ---- */
+  #screen-hub.active{flex-direction:column;}
+  .hub-header{display:flex;align-items:center;justify-content:space-between;padding:16px 26px;border-bottom:1px solid var(--line);flex-shrink:0;}
+  .hub-brand{display:flex;align-items:center;gap:12px;}
+  .brand-badge{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,var(--cyan),#2a7a70);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:700;font-size:17px;color:#0b0f10;flex-shrink:0;}
+  .brand-title{font-family:var(--mono);font-weight:700;font-size:16px;letter-spacing:.05em;}
+  .brand-tag{font-family:var(--mono);font-size:9.5px;color:var(--text-dim);letter-spacing:.08em;text-transform:uppercase;}
+  .hub-tier-tabs{display:flex;gap:8px;align-items:center;}
+  .tier-pill{display:flex;align-items:center;gap:7px;padding:8px 14px;font-size:11px;}
+  .tier-pill.active-tier{background:var(--panel-2);border-color:var(--text-dim);color:var(--text);}
+  .tier-dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;}
+  .gear-btn{width:34px;height:34px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:50%;font-size:15px;}
+
+  .hub-body{flex:1;display:grid;grid-template-columns:1fr 1.5fr;gap:22px;padding:22px 26px;overflow:auto;}
+  .welcome-panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px;display:flex;flex-direction:column;align-items:flex-start;justify-content:flex-end;gap:12px;}
+  .mascot{font-size:58px;line-height:1;}
+  .welcome-title{font-family:var(--mono);font-size:24px;font-weight:700;color:var(--cyan);line-height:1.25;}
+  .welcome-sub{font-size:12px;color:var(--text-dim);line-height:1.5;}
+
+  .lessons-panel{display:flex;flex-direction:column;min-height:0;}
+  .lessons-heading{font-family:var(--mono);font-size:14px;font-weight:700;}
+  .lessons-sub{font-size:11px;color:var(--text-dim);margin:4px 0 14px;}
+  .lesson-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:14px;align-content:start;}
+  .lesson-card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px;display:flex;flex-direction:column;gap:7px;}
+  .lesson-check{position:absolute;top:10px;right:10px;width:20px;height:20px;border-radius:50%;background:var(--green);color:#0b0f10;font-size:11px;display:flex;align-items:center;justify-content:center;font-weight:700;}
+  .lesson-num{font-family:var(--mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;font-weight:700;}
+  .lesson-title{font-size:13px;font-weight:600;}
+  .lesson-desc{font-size:11px;color:var(--text-dim);line-height:1.4;flex:1;}
+  .lesson-start{align-self:flex-start;padding:7px 16px;font-size:10.5px;margin-top:2px;}
+  .view-progress-btn{align-self:flex-end;border:none;color:var(--cyan);padding:6px 0;font-size:11px;margin-top:12px;}
+
+  /* ---- Lesson activity screen (fill-in-the-blank) ---- */
+  #screen-lesson.active{flex-direction:column;}
+  .lesson-header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--line);flex-shrink:0;}
+  .lesson-header-title{font-family:var(--mono);font-size:13px;color:var(--text-dim);}
+  .back-btn{padding:8px 14px;font-size:11px;}
+  .lesson-body{flex:1;display:grid;grid-template-columns:170px 1.5fr 1fr;overflow:auto;}
+  .ai-col{background:linear-gradient(180deg,#161112 0%,#100d0e 100%);padding:14px 12px;display:flex;flex-direction:column;border-right:1px solid var(--line);}
+  .ai-avatar{width:32px;height:32px;border-radius:50%;background:rgba(224,138,107,.15);border:1px solid var(--coral);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:11px;color:var(--coral);margin-bottom:10px;}
+  .site-label{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:12px;display:block;}
+  .code-col{padding:20px;display:flex;flex-direction:column;background:radial-gradient(circle at 70% 20%,#101617 0%,#0b0f10 70%);}
+  .code-display{font-family:var(--mono);font-size:13px;line-height:2;color:var(--text);background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:16px;margin:0;overflow:auto;flex:1;}
+  .code-line{white-space:pre;}
+  .blank-slot{display:inline-block;min-width:64px;height:20px;border-bottom:2px dashed var(--amber);text-align:center;color:var(--amber);vertical-align:middle;}
+  .blank-slot.filled.correct{border-bottom:2px solid var(--green);color:var(--green);font-weight:700;}
+  .blank-slot.dropok{background:rgba(95,191,106,.15);}
+  .lesson-feedback{margin-top:14px;font-family:var(--mono);font-size:12px;min-height:18px;}
+  .lesson-feedback.correct{color:var(--green);}
+  .lesson-feedback.wrong{color:var(--red);}
+  .options-col{padding:20px;background:#0d1213;border-left:1px dashed var(--line);}
+  .options-list{display:flex;flex-wrap:wrap;align-content:flex-start;margin-top:6px;}
+
+  .block{display:inline-flex;align-items:center;justify-content:center;min-width:78px;height:38px;padding:0 12px;margin:5px;border-radius:8px;font-family:var(--mono);font-size:12px;font-weight:600;color:#0b0f10;background:var(--amber);cursor:grab;user-select:none;box-shadow:0 2px 0 rgba(0,0,0,.25);transition:transform .12s ease;}
+  .block.placed{background:var(--green);opacity:.55;cursor:default;}
+  .block.held{position:fixed;z-index:900;transform:scale(1.08) rotate(-2deg);box-shadow:0 6px 14px rgba(0,0,0,.4);pointer-events:none;}
+  .block.rejected{animation:shake .28s;}
+  @keyframes shake{0%,100%{transform:translateX(0);}25%{transform:translateX(-6px);}75%{transform:translateX(6px);}}
+
+  /* ---- Settings overlay ---- */
+  .settings-overlay{position:absolute;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:500;}
+  .settings-overlay.open{display:flex;}
+  .settings-panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;width:300px;display:flex;flex-direction:column;gap:16px;}
+  .settings-header{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:14px;font-weight:700;}
+  .settings-close{padding:4px 10px;font-size:12px;}
+  .settings-row{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text-dim);}
+  .stepper{display:flex;align-items:center;gap:8px;font-family:var(--mono);}
+  .stepper .gbtn{padding:4px 12px;font-size:14px;}
+
+  /* ---- Gesture-driven buttons ---- */
+  .gbtn{font-family:var(--mono);font-size:13px;padding:12px 26px;border-radius:8px;border:1px solid var(--cyan);background:transparent;color:var(--cyan);cursor:pointer;transition:background .15s,color .15s,transform .1s;}
+  .gbtn:not(:disabled):hover{background:rgba(79,217,201,.1);}
+  .gbtn.pulse{transform:scale(.94);background:var(--cyan);color:#0b0f10;}
+  .gbtn:disabled{opacity:.35;cursor:not-allowed;border-color:var(--line);color:var(--text-dim);}
+  .gbtn.hidden{visibility:hidden;}
+
+  /* ---- Cursor (page-fixed, follows the mapped hand position) ---- */
+  #cursor{position:fixed;width:34px;height:34px;border-radius:50%;border:2px solid var(--cyan);background:rgba(79,217,201,.12);pointer-events:none;transform:translate(-50%,-50%);transition:width .1s,height .1s,background .1s,border-color .1s;z-index:1000;display:none;}
+  #cursor::after{content:"";position:absolute;left:50%;top:50%;width:4px;height:4px;background:var(--cyan);border-radius:50%;transform:translate(-50%,-50%);}
+  #cursor.grabbing{border-color:var(--amber);background:rgba(224,169,82,.25);width:26px;height:26px;}
+  #cursor.grabbing::after{background:var(--amber);}
+  #cursor.dropok{border-color:var(--green);}
+
+  /* ---- Toast (progress feedback, non-blocking) ---- */
+  .toast{position:absolute;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--panel-2);border:1px solid var(--cyan);color:var(--text);font-family:var(--mono);font-size:12px;padding:10px 18px;border-radius:8px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:600;}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+
+  /* ---- Debug sidebar (camera preview + dev controls) ---- */
+  /* ---- Debug panel: floating, draggable camera window ---- */
+  #debug{
+    position:fixed; top:20px; right:20px; width:300px; z-index:2000;
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    box-shadow:0 12px 32px rgba(0,0,0,.55);
+    display:flex; flex-direction:column; max-height:88vh;
+  }
+  .cam-header{
+    cursor:move; user-select:none; flex-shrink:0;
+    padding:10px 12px; display:flex; align-items:center; justify-content:space-between;
+    background:var(--panel-2); border-radius:10px 10px 0 0;
+    font-family:var(--mono); font-size:11px; letter-spacing:.05em; text-transform:uppercase; color:var(--text-dim);
+  }
+  .cam-header button{background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:15px;padding:2px 8px;line-height:1;}
+  .cam-header button:hover{color:var(--cyan);}
+  .cam-body{padding:14px;display:flex;flex-direction:column;gap:10px;overflow-y:auto;}
+  #debug.collapsed .cam-body{display:none;}
+  #debug h2{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-dim);margin:0 0 4px;}
+  .video-box{position:relative;width:100%;aspect-ratio:4/3;background:#000;border-radius:8px;overflow:hidden;border:1px solid var(--line);}
+  video{width:100%;height:100%;object-fit:fill;display:block;}
+  canvas.overlay{position:absolute;inset:0;width:100%;height:100%;}
+  button.util{font-family:var(--mono);font-size:12px;padding:9px 10px;border-radius:6px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);cursor:pointer;text-align:left;}
+  button.util:hover{border-color:var(--cyan);color:var(--cyan);}
+  .flip-row{font-family:var(--mono);font-size:12px;display:flex;align-items:center;gap:8px;color:var(--text-dim);}
+  .readout{font-family:var(--mono);font-size:11px;color:var(--text-dim);line-height:1.7;}
+  .readout b{color:var(--text);}
+  .marker-legend{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-dim);}
+  .marker-swatch{width:12px;height:12px;border-radius:3px;background:#e0413a;flex-shrink:0;}
+  /* (this build shows the floating camera window directly -- see #debug above) */
+</style>
+</head>
+<body>
+
+<div id="stage-wrap">
+  <div id="stage">
+
+    <!-- ================= CALIBRATION ================= -->
+    <div id="screen-calibrate" class="screen active">
+      <div class="calib-title">System Setup — Calibration</div>
+      <div class="checklist">
+        <div class="check-row" id="chk-camera"><div class="check-dot"></div>Camera feed active</div>
+        <div class="check-row" id="chk-hand"><div class="check-dot"></div>Hand detected</div>
+        <div class="check-row" id="chk-table"><div class="check-dot"></div>Table corners locked</div>
+        <div class="check-row" id="chk-ratio"><div class="check-dot"></div>Screen-to-table ratio matched</div>
+      </div>
+      <div class="mode-row">
+        <button class="gbtn mode-active" id="btn-mode-auto" data-action="mode-auto">Automatic Detection</button>
+        <button class="gbtn" id="btn-mode-manual" data-action="mode-manual">Manual Input</button>
+      </div>
+      <div class="manual-hint" id="manual-hint"></div>
+      <div style="display:flex;gap:14px;">
+        <button class="gbtn" id="btn-continue-calib" data-action="to-home" disabled>Continue</button>
+        <button class="gbtn skip-btn" data-action="to-home-skip">Skip</button>
+      </div>
+    </div>
+
+    <!-- ================= HOME ================= -->
+    <div id="screen-home" class="screen">
+      <div class="logo">GRASP</div>
+      <div class="tagline">Gesture Recognition for AI-Supported Programming</div>
+      <button class="gbtn" data-action="to-help">Grasp to Continue</button>
+    </div>
+
+    <!-- ================= HELP / TUTORIAL ================= -->
+    <div id="screen-help" class="screen">
+      <div class="help-instructions">
+        <h2>How it works</h2>
+        <div class="instr-step"><span class="instr-num">1</span>Hold your hand open over the table. The circle on screen is your cursor.</div>
+        <div class="instr-step"><span class="instr-num">2</span>Close your fist over a block to grab it.</div>
+        <div class="instr-step"><span class="instr-num">3</span>Move your closed hand to drag the block.</div>
+        <div class="instr-step"><span class="instr-num">4</span>Open your hand over the blank to place it.</div>
+      </div>
+      <div class="help-ai">
+        <h2>AI Tutor</h2>
+        <div class="ai-bubble" id="help-ai-bubble">
+          [Placeholder] Hi! I'll explain each concept before every lesson,
+          and give you hints along the way. Watch the demo below, then let's begin.
+        </div>
+      </div>
+      <div class="demo-area">
+        <div class="demo-label">Demo</div>
+        <div class="demo-drop"></div>
+        <div class="demo-grab" id="demo-grab">printf</div>
+        <div class="demo-cursor" id="demo-cursor"></div>
+      </div>
+      <button class="gbtn hidden" id="btn-lets-start" data-action="to-hub" style="grid-column:1/3;justify-self:center;">Let's Start</button>
+    </div>
+
+    <!-- ================= HUB (lesson dashboard) ================= -->
+    <div id="screen-hub" class="screen">
+      <div class="hub-header">
+        <div class="hub-brand">
+          <div class="brand-badge">G</div>
+          <div>
+            <div class="brand-title">GRASP</div>
+            <div class="brand-tag">Learn C, Hands-On</div>
+          </div>
+        </div>
+        <div class="hub-tier-tabs" id="hub-tier-tabs"></div>
+      </div>
+      <div class="hub-body">
+        <div class="welcome-panel">
+          <div class="mascot">🤖</div>
+          <div class="welcome-title">Welcome to<br/>GRASP</div>
+          <div class="welcome-sub">Your AI Tutor is ready to help you master C programming.</div>
+        </div>
+        <div class="lessons-panel">
+          <div class="lessons-heading">Choose a Lesson</div>
+          <div class="lessons-sub">Select a lesson to begin practicing C programming syntax and concepts.</div>
+          <div class="lesson-grid" id="lesson-grid"></div>
+          <button class="gbtn view-progress-btn" data-action="view-progress">View Progress →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= LESSON (fill-in-the-blank activity) ================= -->
+    <div id="screen-lesson" class="screen">
+      <div class="lesson-header">
+        <button class="gbtn back-btn" data-action="back-to-hub">← Back to Lessons</button>
+        <div class="lesson-header-title" id="lesson-header-title">Lesson</div>
+        <button class="gbtn gear-btn" data-action="open-settings">⚙</button>
+      </div>
+      <div class="lesson-body">
+        <div class="ai-col">
+          <span class="site-label" style="color:var(--coral)">AI Tutor</span>
+          <div class="ai-avatar">AI</div>
+          <div class="ai-bubble" id="lesson-ai-bubble">[Placeholder] Let's fill in the missing syntax together.</div>
+        </div>
+        <div class="code-col">
+          <span class="site-label" style="color:var(--cyan)">Complete the Code</span>
+          <pre class="code-display" id="code-display"></pre>
+          <div class="lesson-feedback" id="lesson-feedback"></div>
+        </div>
+        <div class="options-col">
+          <span class="site-label" style="color:var(--amber)">Options</span>
+          <div class="options-list" id="options-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= SETTINGS (overlay, any screen) ================= -->
+    <div id="settings-overlay" class="settings-overlay">
+      <div class="settings-panel">
+        <div class="settings-header">Settings <button class="gbtn settings-close" data-action="close-settings">✕</button></div>
+        <div class="settings-row">
+          <span>Theme</span>
+          <div class="mode-row">
+            <button class="gbtn mode-active" id="btn-theme-dark" data-action="theme-dark">Dark</button>
+            <button class="gbtn" id="btn-theme-light" data-action="theme-light">Light</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span>Drop Zone Position</span>
+          <div class="mode-row">
+            <button class="gbtn" id="btn-drop-left" data-action="dropzone-left">Left</button>
+            <button class="gbtn mode-active" id="btn-drop-right" data-action="dropzone-right">Right</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span>Grasp Sensitivity</span>
+          <div class="stepper">
+            <button class="gbtn" data-action="sens-down">−</button>
+            <span id="sens-value">0.55</span>
+            <button class="gbtn" data-action="sens-up">+</button>
+          </div>
+        </div>
+        <button class="gbtn" data-action="recalibrate">Recalibrate Hands &amp; Camera</button>
+      </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+  </div>
+</div>
+
+<div id="cursor"></div>
+
+<aside id="debug">
+  <div class="cam-header" id="cam-drag-handle">
+    Camera / Calibration
+    <button id="cam-collapse-btn" title="Collapse">–</button>
+  </div>
+  <div class="cam-body">
+    <div class="video-box">
+      <video id="video" playsinline autoplay muted></video>
+      <canvas id="overlay" class="overlay"></canvas>
+    </div>
+    <div class="marker-legend"><span class="marker-swatch"></span> place 4 red markers at the table's corners</div>
+    <button class="util" id="btn-calib-grasp">Calibrate open-hand baseline</button>
+    <label class="flip-row"><input type="checkbox" id="chk-mirror-x"/> Mirror horizontally</label>
+    <label class="flip-row"><input type="checkbox" id="chk-mirror-y"/> Mirror vertically</label>
+    <div class="readout" id="readout">
+      table: <b id="r-table">searching…</b><br/>
+      ratio: <b id="r-ratio">–</b><br/>
+      grasp baseline: <b id="r-baseline">not set</b><br/>
+      spread: <b id="r-spread">–</b><br/>
+      screen: <b id="r-screen">calibrate</b>
+    </div>
+    <h2>Notes</h2>
+    <p class="readout" style="font-size:10.5px;">
+      Drag this panel by its header to move it anywhere on screen. Every
+      button in the system can be triggered either by grasping over it
+      with your tracked hand, or with a normal mouse click.
+    </p>
+  </div>
+</aside>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script>
+/* =========================================================
+   LESSON CONTENT -- 4 tiers, easiest to most complex, each a
+   short "complete the code" fill-in-the-blank puzzle
+   ========================================================= */
+const TIER_NAMES = ["Tier 1", "Tier 2", "Tier 3", "Tier 4"];
+const TIER_COLORS = ["var(--t1)", "var(--t2)", "var(--t3)", "var(--t4)"];
+
+const LESSONS = [
+  // Tier 1 -- Foundations
+  [
+    { title:"Basic Syntax & Structure", desc:"Learn the main function, semicolons, and braces.",
+      code:["#include <stdio.h>","int main() {","    printf(\"Hello, World!\");","    ___","}"],
+      options:["return 0;","printf();","int main();"], correct:"return 0;" },
+    { title:"Variables & Data Types", desc:"Declare and use int, float, and char variables.",
+      code:["int main() {","    ___ age = 20;","    printf(\"%d\", age);","    return 0;","}"],
+      options:["int","printf","void"], correct:"int" },
+    { title:"Input & Output", desc:"Read input and print output with scanf and printf.",
+      code:["#include <stdio.h>","int main() {","    int age;","    ___(\"%d\", &age);","    return 0;","}"],
+      options:["scanf","printf","int"], correct:"scanf" },
+  ],
+  // Tier 2 -- Control Flow
+  [
+    { title:"Conditional Statements", desc:"Make decisions using if, else if, and else.",
+      code:["int main() {","    int x = 5;","    ___ (x > 0) {","        printf(\"positive\");","    }","    return 0;","}"],
+      options:["if","for","int"], correct:"if" },
+    { title:"Loops", desc:"Repeat actions with for, while, and do-while.",
+      code:["int main() {","    ___ (int i = 0; i < 5; i++) {","        printf(\"%d\", i);","    }","    return 0;","}"],
+      options:["for","if","while"], correct:"for" },
+    { title:"Arrays", desc:"Store and access multiple values using arrays.",
+      code:["int main() {","    int nums[5] = {1,2,3,4,5};","    printf(\"%d\", nums[___]);","    return 0;","}"],
+      options:["0","5","nums"], correct:"0" },
+  ],
+  // Tier 3 -- Working with Data
+  [
+    { title:"Strings & Character Arrays", desc:"Work with text using char arrays.",
+      code:["#include <stdio.h>","int main() {","    char name[] = \"Grasp\";","    printf(\"%___\", name);","    return 0;","}"],
+      options:["s","d","c"], correct:"s" },
+    { title:"Functions", desc:"Break code into reusable functions.",
+      code:["___ greet() {","    printf(\"Hello!\");","}","int main() {","    greet();","    return 0;","}"],
+      options:["void","int","greet"], correct:"void" },
+    { title:"Pointers", desc:"Store and use memory addresses.",
+      code:["int main() {","    int x = 10;","    int ___p = &x;","    printf(\"%d\", *p);","    return 0;","}"],
+      options:["*","&","#"], correct:"*" },
+    { title:"Structures", desc:"Group related data using struct.",
+      code:["___ Point {","    int x;","    int y;","};","int main() {","    struct Point p1;","    return 0;","}"],
+      options:["struct","int","void"], correct:"struct" },
+  ],
+  // Tier 4 -- Advanced Concepts
+  [
+    { title:"Dynamic Memory Allocation", desc:"Allocate memory at runtime with malloc.",
+      code:["#include <stdlib.h>","int main() {","    int *arr = (int*) ___(5 * sizeof(int));","    free(arr);","    return 0;","}"],
+      options:["malloc","free","sizeof"], correct:"malloc" },
+    { title:"File Handling", desc:"Read and write files using FILE pointers.",
+      code:["#include <stdio.h>","int main() {","    FILE *fp = ___(\"data.txt\", \"r\");","    fclose(fp);","    return 0;","}"],
+      options:["fopen","fclose","fread"], correct:"fopen" },
+    { title:"Preprocessor Directives", desc:"Use #include and #define before compilation.",
+      code:["___ <stdio.h>","#define PI 3.14","int main() {","    printf(\"%f\", PI);","    return 0;","}"],
+      options:["#include","#define","#import"], correct:"#include" },
+  ],
+];
+const progress = {}; // "tier-idx" -> true once solved
+
+/* =========================================================
+   SCREEN NAVIGATION
+   ========================================================= */
+const screens = { calibrate:'screen-calibrate', home:'screen-home', help:'screen-help', hub:'screen-hub', lesson:'screen-lesson' };
+let currentScreen = 'calibrate';
+// Shows one screen, hides the rest; also kicks off screen-entry side-effects
+function setScreen(name){
+  Object.values(screens).forEach(id=>document.getElementById(id).classList.remove('active'));
+  document.getElementById(screens[name]).classList.add('active');
+  currentScreen = name;
+  document.getElementById('r-screen').textContent = name;
+  if(name==='help') runDemo();
+}
+
+/* =========================================================
+   GENERIC ACTION DISPATCH (works for both mouse clicks and
+   grasp-triggered clicks -- every .gbtn routes through here)
+   ========================================================= */
+document.body.addEventListener('click', (e)=>{
+  const btn = e.target.closest('.gbtn');
+  if(!btn || btn.disabled) return;
+  handleAction(btn.dataset.action);
+});
+// Routes a button's data-action to what it should actually do
+function handleAction(action){
+  if(!action) return;
+  if(action==='to-home' || action==='to-home-skip') setScreen('home');
+  else if(action==='to-help') setScreen('help');
+  else if(action==='to-hub' || action==='back-to-hub') setScreen('hub');
+  else if(action==='mode-auto') setCalibMode('auto');
+  else if(action==='mode-manual') setCalibMode('manual');
+  else if(action.startsWith('hub-tier-')) setActiveHubTier(parseInt(action.split('-')[2],10));
+  else if(action.startsWith('start-lesson-')){
+    const parts = action.split('-');
+    openLesson(parseInt(parts[2],10), parseInt(parts[3],10));
+  }
+  else if(action==='view-progress') showProgressToast();
+  else if(action==='open-settings') settingsOverlay.classList.add('open');
+  else if(action==='close-settings') settingsOverlay.classList.remove('open');
+  else if(action==='theme-dark') setTheme('dark');
+  else if(action==='theme-light') setTheme('light');
+  else if(action==='sens-up') adjustSensitivity(0.05);
+  else if(action==='sens-down') adjustSensitivity(-0.05);
+  else if(action==='dropzone-left') applyDropZoneSetting('left');
+  else if(action==='dropzone-right') applyDropZoneSetting('right');
+  else if(action==='recalibrate') doRecalibrate();
+}
+
+// Switches between automatic marker detection and manual corner-clicking
+function setCalibMode(mode){
+  state.calibMode = mode;
+  document.getElementById('btn-mode-auto').classList.toggle('mode-active', mode==='auto');
+  document.getElementById('btn-mode-manual').classList.toggle('mode-active', mode==='manual');
+  state.manualPoints = [];
+  const hint = document.getElementById('manual-hint');
+  hint.textContent = mode==='manual' ? 'Click 4 corners on the camera feed: top-left → top-right → bottom-right → bottom-left' : '';
+}
+
+/* =========================================================
+   HUB (lesson dashboard): tier tabs + lesson cards
+   ========================================================= */
+let activeHubTier = 0;
+// Builds the Tier 1-4 tab row once at startup
+function buildTierTabs(){
+  const wrap = document.getElementById('hub-tier-tabs');
+  TIER_NAMES.forEach((name,i)=>{
+    const b = document.createElement('button');
+    b.className = 'gbtn tier-pill' + (i===0 ? ' active-tier' : '');
+    b.dataset.action = `hub-tier-${i}`;
+    b.innerHTML = `<span class="tier-dot" style="background:${TIER_COLORS[i]}"></span>${name}`;
+    wrap.appendChild(b);
+  });
+  const gear = document.createElement('button');
+  gear.className = 'gbtn gear-btn';
+  gear.dataset.action = 'open-settings';
+  gear.textContent = '⚙';
+  wrap.appendChild(gear);
+}
+// Highlights the chosen tier tab and re-renders its lesson cards
+function setActiveHubTier(i){
+  activeHubTier = i;
+  document.querySelectorAll('.tier-pill').forEach((t,idx)=>t.classList.toggle('active-tier', idx===i));
+  renderLessonGrid(i);
+}
+// Builds the lesson cards for a tier, with a checkmark on completed ones
+function renderLessonGrid(tier){
+  const grid = document.getElementById('lesson-grid');
+  grid.innerHTML = '';
+  LESSONS[tier].forEach((lesson, idx)=>{
+    const done = !!progress[`${tier}-${idx}`];
+    const card = document.createElement('div');
+    card.className = 'lesson-card';
+    card.innerHTML = `
+      ${done ? '<div class="lesson-check">✓</div>' : ''}
+      <div class="lesson-num" style="color:${TIER_COLORS[tier]}">LESSON ${String(idx+1).padStart(2,'0')}</div>
+      <div class="lesson-title">${lesson.title}</div>
+      <div class="lesson-desc">${lesson.desc}</div>
+      <button class="gbtn lesson-start" data-action="start-lesson-${tier}-${idx}">${done ? 'REVIEW' : 'START'}</button>
+    `;
+    grid.appendChild(card);
+  });
+}
+// Non-blocking status message (avoids alert(), which would freeze tracking)
+let toastTimer = null;
+function showProgressToast(){
+  const total = LESSONS.reduce((a,arr)=>a+arr.length,0);
+  const done = Object.values(progress).filter(Boolean).length;
+  const toast = document.getElementById('toast');
+  toast.textContent = `${done} / ${total} lessons completed`;
+  toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>toast.classList.remove('show'), 2500);
+}
+
+/* =========================================================
+   LESSON ACTIVITY: renders the code with a blank, and the
+   draggable answer options; grades a drop against the blank
+   ========================================================= */
+let currentLesson = null; // {tier, idx}
+
+// Builds the code display (with the blank inline) and the option chips
+function openLesson(tier, idx){
+  currentLesson = { tier, idx };
+  const lesson = LESSONS[tier][idx];
+  const done = !!progress[`${tier}-${idx}`];
+
+  document.getElementById('lesson-header-title').textContent = `${TIER_NAMES[tier]} — ${lesson.title}`;
+
+  const codeDisplay = document.getElementById('code-display');
+  codeDisplay.innerHTML = '';
+  lesson.code.forEach(line=>{
+    const lineEl = document.createElement('div');
+    lineEl.className = 'code-line';
+    if(line.includes('___')){
+      const [pre, suf] = line.split('___');
+      lineEl.appendChild(document.createTextNode(pre));
+      const blank = document.createElement('span');
+      blank.className = 'blank-slot';
+      blank.id = 'blank-slot';
+      if(done){ blank.textContent = lesson.correct; blank.classList.add('filled','correct'); }
+      lineEl.appendChild(blank);
+      lineEl.appendChild(document.createTextNode(suf));
+    } else {
+      lineEl.appendChild(document.createTextNode(line));
+    }
+    codeDisplay.appendChild(lineEl);
+  });
+
+  const optionsList = document.getElementById('options-list');
+  optionsList.innerHTML = '';
+  lesson.options.forEach(opt=>{
+    const b = document.createElement('div');
+    b.className = 'block' + (done ? ' placed' : '');
+    b.textContent = opt;
+    b.dataset.value = opt;
+    optionsList.appendChild(b);
+  });
+
+  const fb = document.getElementById('lesson-feedback');
+  fb.textContent = done ? 'Already completed -- feel free to review.' : '';
+  fb.className = 'lesson-feedback';
+
+  setScreen('lesson');
+}
+
+// Grades a dropped option against the current lesson's correct answer
+function handleLessonDrop(blockEl){
+  blockEl.classList.remove('held');
+  blockEl.style.position=''; blockEl.style.left=''; blockEl.style.top='';
+  const { tier, idx } = currentLesson;
+  const lesson = LESSONS[tier][idx];
+  const blank = document.getElementById('blank-slot');
+  const fb = document.getElementById('lesson-feedback');
+
+  if(blockEl.dataset.value === lesson.correct){
+    blank.textContent = lesson.correct;
+    blank.classList.add('filled','correct');
+    progress[`${tier}-${idx}`] = true;
+    fb.textContent = 'Correct! Lesson complete.';
+    fb.className = 'lesson-feedback correct';
+    document.querySelectorAll('#options-list .block').forEach(x=>x.classList.add('placed'));
+  } else {
+    blockEl.classList.add('rejected');
+    setTimeout(()=>blockEl.classList.remove('rejected'), 300);
+    fb.textContent = 'Not quite -- try again.';
+    fb.className = 'lesson-feedback wrong';
+  }
+}
+
+/* =========================================================
+   DEMO ANIMATION (Help screen, plays once when screen opens)
+   ========================================================= */
+let demoTimer = null;
+// Plays the grab-drag-drop demo once, then reveals "Let's Start"
+function runDemo(){
+  const grab = document.getElementById('demo-grab');
+  const cursor = document.getElementById('demo-cursor');
+  const startBtn = document.getElementById('btn-lets-start');
+  grab.classList.remove('moved'); cursor.classList.remove('moved');
+  startBtn.classList.add('hidden');
+  clearTimeout(demoTimer);
+  demoTimer = setTimeout(()=>{
+    grab.classList.add('moved'); cursor.classList.add('moved');
+    setTimeout(()=>{ startBtn.classList.remove('hidden'); }, 2000);
+  }, 700);
+}
+
+/* =========================================================
+   SETTINGS: theme, grasp sensitivity, recalibration
+   ========================================================= */
+const settingsOverlay = document.getElementById('settings-overlay');
+function setTheme(mode){
+  document.body.classList.toggle('light-theme', mode==='light');
+  document.getElementById('btn-theme-dark').classList.toggle('mode-active', mode==='dark');
+  document.getElementById('btn-theme-light').classList.toggle('mode-active', mode==='light');
+}
+function adjustSensitivity(delta){
+  state.graspThreshold = Math.min(0.80, Math.max(0.35, state.graspThreshold + delta));
+  document.getElementById('sens-value').textContent = state.graspThreshold.toFixed(2);
+}
+// Swaps which side the code/blank (drop zone) vs. the answer options
+// (pick zone) appear on, via CSS order -- user's choice, not hardcoded
+function applyDropZoneSetting(pos){
+  const codeCol = document.querySelector('.code-col');
+  const optionsCol = document.querySelector('.options-col');
+  if(pos==='left'){ codeCol.style.order = 0; optionsCol.style.order = 1; }
+  else { codeCol.style.order = 1; optionsCol.style.order = 0; }
+  state.dropZonePos = pos;
+  document.getElementById('btn-drop-left').classList.toggle('mode-active', pos==='left');
+  document.getElementById('btn-drop-right').classList.toggle('mode-active', pos==='right');
+}
+// Sends the student back to Calibration to redo table + ratio detection
+function doRecalibrate(){
+  settingsOverlay.classList.remove('open');
+  state.tableLocked = false;
+  calib.table = false; calib.ratio = false;
+  refreshCalibUI();
+  setScreen('calibrate');
+}
+
+/* =========================================================
+   CALIBRATION STATE
+   ========================================================= */
+const calib = { camera:false, hand:false, table:false, ratio:false };
+// Updates the checklist dots and enables/disables the Continue button
+function refreshCalibUI(){
+  for(const key of Object.keys(calib)){
+    document.getElementById('chk-'+key).classList.toggle('ok', calib[key]);
+  }
+  const allOk = Object.values(calib).every(Boolean);
+  document.getElementById('btn-continue-calib').disabled = !allOk;
+}
+
+/* =========================================================
+   CORE TRACKING STATE
+   ========================================================= */
+const state = {
+  handPresent:false, videoW:0, videoH:0,
+  mirrorX:false, mirrorY:false,
+  H:null, tableLocked:false,
+  calibMode:'auto', manualPoints:[],
+  openBaseline:null, graspThreshold:0.55,
+  calibratingGrasp:false, graspSamples:[],
+  grasping:false, cursorPage:{x:0,y:0},
+  held:null, heldOffset:{x:0,y:0},
+};
+
+// DOM references used throughout
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const octx = overlay.getContext('2d');
+const cursorEl = document.getElementById('cursor');
+const stageEl = document.getElementById('stage');
+
+const dotTableText = document.getElementById('r-table');
+const dotRatioText = document.getElementById('r-ratio');
+const rBaseline = document.getElementById('r-baseline');
+const rSpread = document.getElementById('r-spread');
+
+document.getElementById('btn-calib-grasp').addEventListener('click', startGraspCalibration);
+document.getElementById('chk-mirror-x').addEventListener('change', (e)=>{ state.mirrorX=e.target.checked; applyVideoTransform(); });
+document.getElementById('chk-mirror-y').addEventListener('change', (e)=>{ state.mirrorY=e.target.checked; applyVideoTransform(); });
+// Flips the raw video preview so it matches the mirror checkboxes
+function applyVideoTransform(){
+  video.style.transform = `scale(${state.mirrorX?-1:1}, ${state.mirrorY?-1:1})`;
+}
+
+/* =========================================================
+   Homography (normalized 0-1 -> normalized 0-1)
+   ========================================================= */
+// Solves the 8x8 linear system (Gaussian elimination) for the homography
+function solveLinearSystem(A,b){
+  const n=8; const M=A.map((row,i)=>[...row,b[i]]);
+  for(let i=0;i<n;i++){
+    let maxRow=i;
+    for(let k=i+1;k<n;k++) if(Math.abs(M[k][i])>Math.abs(M[maxRow][i])) maxRow=k;
+    [M[i],M[maxRow]]=[M[maxRow],M[i]];
+    for(let k=i+1;k<n;k++){ const f=M[k][i]/M[i][i]; for(let j=i;j<=n;j++) M[k][j]-=f*M[i][j]; }
+  }
+  const x=new Array(n).fill(0);
+  for(let i=n-1;i>=0;i--){ let sum=M[i][n]; for(let j=i+1;j<n;j++) sum-=M[i][j]*x[j]; x[i]=sum/M[i][i]; }
+  return x;
+}
+// Builds the 3x3 homography matrix that maps 4 src points onto 4 dst points
+function computeHomography(src,dst){
+  const A=[],b=[];
+  for(let i=0;i<4;i++){
+    const {x:sx,y:sy}=src[i],{x:dx,y:dy}=dst[i];
+    A.push([sx,sy,1,0,0,0,-dx*sx,-dx*sy]); b.push(dx);
+    A.push([0,0,0,sx,sy,1,-dy*sx,-dy*sy]); b.push(dy);
+  }
+  const h=solveLinearSystem(A,b);
+  return [h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],1];
+}
+// Projects a single point through the homography matrix
+function applyHomography(H,x,y){
+  const w=H[6]*x+H[7]*y+1;
+  return { x:(H[0]*x+H[1]*y+H[2])/w, y:(H[3]*x+H[4]*y+H[5])/w };
+}
+// Homography always maps onto this normalized unit square
+const DST_UNIT_SQUARE=[{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}];
+
+/* =========================================================
+   Automatic table-corner detection (red markers) + ratio lock
+   ========================================================= */
+// Small offscreen canvas used to scan frames for red markers cheaply
+const sampleCanvas = document.createElement('canvas');
+sampleCanvas.width=160; sampleCanvas.height=120;
+const sctx = sampleCanvas.getContext('2d',{willReadFrequently:true});
+// True if a pixel is red enough to count as a calibration marker
+function isMarkerPixel(r,g,b){ return r>120 && (r-g)>55 && (r-b)>55; }
+
+// Shared by both auto and manual calibration: builds the homography,
+// measures the table's real aspect ratio, and applies it to the stage
+function lockTableFromPoints(normPts){
+  // normPts: 4 normalized (0-1) camera-space points, order TL,TR,BR,BL
+  state.H = computeHomography(normPts, DST_UNIT_SQUARE);
+  state.tableLocked = true;
+  calib.table = true;
+  dotTableText.textContent = 'locked';
+
+  const px = normPts.map(p=>({x:p.x*state.videoW, y:p.y*state.videoH}));
+  const topW = Math.hypot(px[1].x-px[0].x, px[1].y-px[0].y);
+  const botW = Math.hypot(px[2].x-px[3].x, px[2].y-px[3].y);
+  const leftH = Math.hypot(px[3].x-px[0].x, px[3].y-px[0].y);
+  const rightH = Math.hypot(px[2].x-px[1].x, px[2].y-px[1].y);
+  const avgW=(topW+botW)/2, avgH=(leftH+rightH)/2;
+  if(avgH>0){
+    const aspect = avgW/avgH;
+    stageEl.style.aspectRatio = `${aspect} / 1`;
+    calib.ratio = true;
+    dotRatioText.textContent = aspect.toFixed(2)+' : 1';
+  }
+  refreshCalibUI();
+}
+
+// Manual mode: clicking the camera preview records a corner point;
+// after the 4th click, calibration locks (a 5th click starts over)
+overlay.addEventListener('click', (e)=>{
+  if(state.calibMode!=='manual' || currentScreen!=='calibrate') return;
+  const rect = overlay.getBoundingClientRect();
+  const nx = (e.clientX-rect.left)/rect.width;
+  const ny = (e.clientY-rect.top)/rect.height;
+  if(state.manualPoints.length>=4) state.manualPoints = [];
+  state.manualPoints.push({x:nx,y:ny});
+  const hint = document.getElementById('manual-hint');
+  if(state.manualPoints.length<4){
+    hint.textContent = `Click ${4-state.manualPoints.length} more corner(s)…`;
+  } else {
+    hint.textContent = 'Calibrated manually. Click again to redo.';
+    lockTableFromPoints(state.manualPoints);
+  }
+});
+
+// Draws the manually-clicked corner points/quad on the debug overlay
+function drawManualPoints(){
+  if(state.manualPoints.length===0) return;
+  octx.strokeStyle='#e0a952'; octx.fillStyle='#e0a952'; octx.lineWidth=2;
+  state.manualPoints.forEach(p=>{
+    octx.beginPath(); octx.arc(p.x*overlay.width, p.y*overlay.height, 5,0,Math.PI*2); octx.fill();
+  });
+  if(state.manualPoints.length>1){
+    octx.beginPath();
+    state.manualPoints.forEach((p,i)=>{
+      const x=p.x*overlay.width, y=p.y*overlay.height;
+      if(i===0) octx.moveTo(x,y); else octx.lineTo(x,y);
+    });
+    if(state.manualPoints.length===4) octx.closePath();
+    octx.stroke();
+  }
+}
+
+// Auto mode: scans a downscaled frame for a red marker in each quadrant;
+// if all 4 are found, locks the table -- otherwise keeps the last lock
+function detectTableMarkers(){
+  if(state.calibMode!=='auto') return;
+  if(!state.videoW) return;
+  sctx.drawImage(video,0,0,sampleCanvas.width,sampleCanvas.height);
+  const {data,width:w,height:h} = sctx.getImageData(0,0,sampleCanvas.width,sampleCanvas.height);
+  const quad=[{sx:0,sy:0,n:0},{sx:0,sy:0,n:0},{sx:0,sy:0,n:0},{sx:0,sy:0,n:0}];
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const i=(y*w+x)*4;
+      if(isMarkerPixel(data[i],data[i+1],data[i+2])){
+        const idx=(x<w/2 && y<h/2)?0:(x>=w/2 && y<h/2)?1:(x>=w/2 && y>=h/2)?2:3;
+        quad[idx].sx+=x; quad[idx].sy+=y; quad[idx].n++;
+      }
+    }
+  }
+  const MIN=12;
+  if(quad.every(q=>q.n>=MIN)){
+    const order=[0,1,3,2]; // TL,TR,BR,BL
+    const pts = order.map(i=>({x:quad[i].sx/quad[i].n/w, y:quad[i].sy/quad[i].n/h}));
+    lockTableFromPoints(pts);
+    dotTableText.textContent = 'locked (auto)';
+  } else if(!state.tableLocked){
+    dotTableText.textContent = 'searching for markers…';
+    refreshCalibUI();
+  }
+}
+// Re-scan for markers a few times a second
+setInterval(detectTableMarkers, 300);
+
+/* =========================================================
+   Grasp baseline calibration
+   ========================================================= */
+// Samples grasp "spread" for ~1.2s while the hand is held open, to
+// set the baseline that "closed fist" gets compared against
+function startGraspCalibration(){
+  state.calibratingGrasp = true; state.graspSamples = [];
+  setTimeout(()=>{
+    if(state.graspSamples.length>0){
+      const avg = state.graspSamples.reduce((a,b)=>a+b,0)/state.graspSamples.length;
+      state.openBaseline = avg;
+      rBaseline.textContent = avg.toFixed(4);
+    }
+    state.calibratingGrasp = false;
+  }, 1200);
+}
+
+/* =========================================================
+   Landmark helpers
+   ========================================================= */
+const FINGERTIPS=[4,8,12,16,20], WRIST=0;
+// Palm-center landmarks: wrist + the 4 knuckle (MCP) joints. These barely
+// move when the hand curls into a fist -- unlike the fingertips, which
+// would drag the average down/toward the palm on every grasp.
+const PALM_LANDMARKS=[0,5,9,13,17];
+// Mirrors a point the same way the video preview is mirrored on screen
+function displayPoint(p){ return { x: state.mirrorX?1-p.x:p.x, y: state.mirrorY?1-p.y:p.y }; }
+// Grasp metric: average wrist-to-fingertip distance (shrinks when the fist closes)
+function computeSpread(lm){
+  const wrist=lm[WRIST]; let sum=0;
+  for(const i of FINGERTIPS) sum += Math.hypot(lm[i].x-wrist.x, lm[i].y-wrist.y);
+  return sum/FINGERTIPS.length;
+}
+// Stable palm-center point the cursor is anchored to
+function computeHandCenter(lm){
+  let sx=0,sy=0;
+  for(const i of PALM_LANDMARKS){ sx+=lm[i].x; sy+=lm[i].y; }
+  return {x:sx/PALM_LANDMARKS.length, y:sy/PALM_LANDMARKS.length};
+}
+
+/* =========================================================
+   MediaPipe Hands
+   ========================================================= */
+// Loads MediaPipe's hand-tracking model, tuned for a single tracked hand
+const hands = new Hands({ locateFile:(f)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+hands.setOptions({ maxNumHands:1, modelComplexity:1, minDetectionConfidence:0.7, minTrackingConfidence:0.6 });
+hands.onResults(onResults);
+
+// Runs on every tracked frame: draws landmarks, maps the hand onto the
+// cursor position FIRST, then handles grasp state (so grab/drop hit-tests
+// always use this frame's position, not a stale one from last frame)
+function onResults(results){
+  octx.clearRect(0,0,overlay.width,overlay.height);
+  drawManualPoints();
+  if(!results.multiHandLandmarks || results.multiHandLandmarks.length===0){
+    state.handPresent=false; cursorEl.style.display='none'; return;
+  }
+  state.handPresent=true; calib.hand=true; refreshCalibUI();
+  const lm = results.multiHandLandmarks[0];
+
+  octx.fillStyle='#4fd9c9';
+  for(const raw of lm){
+    const p=displayPoint(raw);
+    octx.beginPath(); octx.arc(p.x*overlay.width,p.y*overlay.height,3,0,Math.PI*2); octx.fill();
+  }
+  const centerDisp = displayPoint(computeHandCenter(lm));
+  octx.fillStyle='#e0a952';
+  octx.beginPath(); octx.arc(centerDisp.x*overlay.width, centerDisp.y*overlay.height, 5,0,Math.PI*2); octx.fill();
+
+  // 1. Map the hand to a workspace position FIRST, using this frame's
+  // landmarks -- must happen before grasp hit-testing below, or grab/drop
+  // decisions would be judged against last frame's stale position
+  if(state.tableLocked){
+    const handN = displayPoint(computeHandCenter(lm));
+    const mapped = applyHomography(state.H, handN.x, handN.y);
+    const clamped = { x:Math.min(1,Math.max(0,mapped.x)), y:Math.min(1,Math.max(0,mapped.y)) };
+    const sr = stageEl.getBoundingClientRect();
+    state.cursorPage = { x: sr.left + clamped.x*sr.width, y: sr.top + clamped.y*sr.height };
+  }
+
+  // 2. grasp metric + grab/drop handling (uses the fresh position above)
+  const spread = computeSpread(lm);
+  rSpread.textContent = spread.toFixed(4);
+  if(state.calibratingGrasp) state.graspSamples.push(spread);
+  if(state.openBaseline) setGrasping(spread < state.openBaseline*state.graspThreshold);
+
+  // 3. render the cursor (and move any still-held block) at that position
+  if(state.tableLocked) updateCursor(state.cursorPage);
+}
+
+/* =========================================================
+   Cursor + generic gesture hit-testing (buttons, options, blank)
+   ========================================================= */
+// Moves the cursor (and any still-held option block) to the mapped position
+function updateCursor(pos){
+  cursorEl.style.display='block';
+  cursorEl.style.left=pos.x+'px'; cursorEl.style.top=pos.y+'px';
+  if(state.held){
+    const b=state.held;
+    b.style.left=(pos.x-state.heldOffset.x)+'px';
+    b.style.top=(pos.y-state.heldOffset.y)+'px';
+    const over = isOverBlank(pos);
+    cursorEl.classList.toggle('dropok', over);
+    const blank = document.getElementById('blank-slot');
+    if(blank) blank.classList.toggle('dropok', over);
+  }
+}
+// True if a point is over the current lesson's blank
+function isOverBlank(pos){
+  const el = document.getElementById('blank-slot');
+  if(!el) return false;
+  return pointInRect(pos, el.getBoundingClientRect());
+}
+// Generic point-in-rectangle test, used by all hit-testing below
+function pointInRect(pos, r){ return pos.x>=r.left && pos.x<=r.right && pos.y>=r.top && pos.y<=r.bottom; }
+
+// Finds the topmost visible, enabled gesture-button under a point.
+// While Settings is open, only its own buttons are hit-testable, so the
+// screen underneath can't be interacted with accidentally.
+function findGButtonUnder(pos){
+  const btns = settingsOverlay.classList.contains('open')
+    ? settingsOverlay.querySelectorAll('.gbtn:not(:disabled)')
+    : document.querySelectorAll('.screen.active .gbtn:not(:disabled), #screen-calibrate .gbtn:not(:disabled)');
+  for(const b of btns){
+    if(b.offsetParent===null) continue; // hidden
+    if(pointInRect(pos, b.getBoundingClientRect())) return b;
+  }
+  return null;
+}
+// Finds a grabbable (unplaced) answer option under a point -- lesson screen only
+function findOptionUnder(pos){
+  if(currentScreen!=='lesson') return null;
+  const list = document.getElementById('options-list');
+  const blocks = list.querySelectorAll('.block:not(.placed)');
+  for(const b of blocks){
+    if(pointInRect(pos, b.getBoundingClientRect())) return b;
+  }
+  return null;
+}
+
+// Handles a grasp on/off transition: triggers a button, grabs an option,
+// or -- on release -- grades the drop against the lesson's blank
+function setGrasping(isClosed){
+  const was = state.grasping;
+  state.grasping = isClosed;
+  cursorEl.classList.toggle('grabbing', isClosed);
+
+  if(isClosed && !was){
+    // priority 1: gesture-buttons (navigation, tabs, settings, etc.)
+    const btn = findGButtonUnder(state.cursorPage);
+    if(btn){
+      btn.classList.add('pulse');
+      setTimeout(()=>btn.classList.remove('pulse'), 180);
+      btn.click();
+      return;
+    }
+    // priority 2: draggable answer options (lesson screen only, and
+    // never while the Settings overlay is covering the screen)
+    if(!settingsOverlay.classList.contains('open') && !state.held){
+      const target = findOptionUnder(state.cursorPage);
+      if(target){
+        state.held = target;
+        const r = target.getBoundingClientRect();
+        state.heldOffset = { x: state.cursorPage.x-r.left, y: state.cursorPage.y-r.top };
+        target.classList.add('held');
+        target.style.position='fixed';
+      }
+    }
+  }
+
+  if(!isClosed && was && state.held){
+    const b = state.held;
+    if(isOverBlank(state.cursorPage)){
+      handleLessonDrop(b);
+    } else {
+      b.classList.remove('held'); b.style.position=''; b.style.left=''; b.style.top='';
+      b.classList.add('rejected');
+      setTimeout(()=>b.classList.remove('rejected'), 300);
+    }
+    state.held = null;
+    const blank = document.getElementById('blank-slot');
+    if(blank) blank.classList.remove('dropok');
+  }
+}
+
+/* =========================================================
+   Camera bootstrap
+   ========================================================= */
+// Requests the webcam, sizes the preview to match it exactly (no crop),
+// and starts MediaPipe's per-frame camera loop
+async function start(){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({ video:{ width:640, height:480 } });
+    video.srcObject = stream;
+    await video.play();
+    state.videoW = video.videoWidth || 640;
+    state.videoH = video.videoHeight || 480;
+    video.parentElement.style.aspectRatio = `${state.videoW} / ${state.videoH}`;
+    overlay.width = video.clientWidth; overlay.height = video.clientHeight;
+    calib.camera = true; refreshCalibUI();
+
+    const camera = new Camera(video, { onFrame: async ()=>{ await hands.send({image:video}); }, width:state.videoW, height:state.videoH });
+    camera.start();
+  }catch(err){
+    alert('Camera access failed: '+err.message+'\nOpen this file directly in your browser (not inside another embedded preview) and allow camera access.');
+  }
+}
+buildTierTabs();
+renderLessonGrid(0);
+applyDropZoneSetting('right');
+window.addEventListener('load', start);
+// Keeps the debug overlay canvas sized to match the video element
+window.addEventListener('resize', ()=>{ overlay.width=video.clientWidth; overlay.height=video.clientHeight; });
+
+/* =========================================================
+   Floating camera panel: drag by header, collapse to save space
+   ========================================================= */
+(function(){
+  const panel = document.getElementById('debug');
+  const handle = document.getElementById('cam-drag-handle');
+  const collapseBtn = document.getElementById('cam-collapse-btn');
+  let dragging = false, offX = 0, offY = 0;
+
+  handle.addEventListener('mousedown', (e)=>{
+    if(e.target.closest('button')) return; // don't start a drag from the collapse button
+    dragging = true;
+    const r = panel.getBoundingClientRect();
+    offX = e.clientX - r.left; offY = e.clientY - r.top;
+    // switch from right-anchored to left-anchored once picked up, so it
+    // tracks the cursor instead of snapping back to its starting corner
+    panel.style.right = 'auto';
+    panel.style.left = r.left + 'px';
+    panel.style.top = r.top + 'px';
+    document.body.style.userSelect = 'none';
+  });
+  window.addEventListener('mousemove', (e)=>{
+    if(!dragging) return;
+    const x = Math.max(0, Math.min(window.innerWidth - 60, e.clientX - offX));
+    const y = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - offY));
+    panel.style.left = x + 'px';
+    panel.style.top = y + 'px';
+  });
+  window.addEventListener('mouseup', ()=>{ dragging = false; document.body.style.userSelect = ''; });
+
+  collapseBtn.addEventListener('click', ()=>{
+    panel.classList.toggle('collapsed');
+    collapseBtn.textContent = panel.classList.contains('collapsed') ? '+' : '–';
+  });
+})();
+</script>
+</body>
+</html>
